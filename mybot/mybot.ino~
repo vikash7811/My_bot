@@ -1,0 +1,470 @@
+#include <Servo.h> 
+#include <math.h> 
+
+
+
+#define IOP1  14
+#define IOP2  15
+
+
+
+unsigned char datapacket[7]={0,0,0,0,0,0,0};
+
+Servo headpan;
+Servo headtilt;
+
+int val_new;
+int val_old;
+int leftclicks = 0;
+int leftturns = 0;
+int rightclicks = 0;
+int rightturns = 0;
+
+int MotorSpeedPinL = 4; 
+int MotorDirPinL = 5; 
+int brakePinL = 6; 
+
+int MotorSpeedPinR = 9; 
+int MotorDirPinR = 10; 
+int brakePinR = 11; 
+
+unsigned char encodercount = 0;
+unsigned char wheelspeed = 0;
+unsigned char sonarthreshold;
+unsigned char irthreshold;
+unsigned char headspeed;
+unsigned char leftencoder;
+unsigned char leftencodertotal = 0;
+unsigned char rightencoder;
+unsigned char rightencodertotal = 0;
+unsigned char headpanposition;  //initialise to 128 for central position
+unsigned char headtiltposition; 
+unsigned char robotdirection;
+unsigned char currentspeed;
+
+unsigned char preamble1;
+unsigned char preamble2; 
+
+
+int headpanIn = 100;
+int headtiltIn = 110;
+
+
+int incrementleft(){
+    val_new = digitalRead(IOP1);
+   
+    if(val_new != val_old) {
+        if(leftclicks == 40) {
+            leftclicks = 1;
+            leftencodertotal++;            
+	}
+        else leftclicks++;
+       
+        val_old = val_new;
+    }
+    
+    return leftencodertotal; 
+}
+
+
+
+
+int incrementright(){
+    val_new = digitalRead(IOP2);
+   
+    if(val_new != val_old) {
+        if(rightclicks == 40) {
+            rightclicks = 1;
+            rightencodertotal++;
+            
+        }
+        else rightclicks++;
+        val_old = val_new;
+    }
+    return rightencodertotal;
+}
+
+
+
+void setup() 
+{ 
+
+  
+  Serial.begin(115200); //start serial communication
+  
+  headpan.attach(2);
+  headtilt.attach(3);
+
+  headpan.write(headpanIn);  
+  headtilt.write(headpanIn);
+
+  pinMode(MotorSpeedPinL, OUTPUT);
+  pinMode(MotorDirPinL, OUTPUT); 
+  pinMode(brakePinL,OUTPUT);
+
+  pinMode(MotorSpeedPinR, OUTPUT);
+  pinMode(MotorDirPinR, OUTPUT); 
+  pinMode(brakePinR,OUTPUT);
+
+  pinMode(IOP1, INPUT);
+  pinMode(IOP2, INPUT);
+
+  pinMode(13, OUTPUT);
+  digitalWrite(13, LOW); //onboard led off
+ 
+} 
+
+
+void loop() 
+{ 
+  
+  if (Serial.available()>=7)
+  {
+    
+    digitalWrite(13, HIGH); //onboard led on
+    preamble1 = Serial.read(); 
+    if(preamble1==255)
+    {
+      
+      preamble2 = Serial.read();
+      if(preamble2==255)
+      {
+        unsigned char instruction = Serial.read();
+        switch(instruction){
+          case 0: //get data - return a packets of all sensor data
+            Serial.read(); //read extra bytes of data to tidy up
+            Serial.read();
+            Serial.read();
+            Serial.read();
+            readsensors();
+            writeserialdata(datapacket,7);
+            break;
+          case 1: //robot forward
+            encodercount = Serial.read();
+            wheelspeed = Serial.read();
+            sonarthreshold = Serial.read();
+            irthreshold = Serial.read();
+            Serial.read();
+            robotdirection = 1;
+            moverobot(robotdirection,encodercount, wheelspeed,sonarthreshold, irthreshold);
+            writeserialdata(datapacket,7);
+            leftencodertotal = 0; //after sending data, clear encoder totals
+            rightencodertotal = 0;
+            break;
+          case 2: //robot left
+            encodercount = Serial.read();
+            wheelspeed = Serial.read();
+            sonarthreshold = Serial.read();
+            irthreshold = Serial.read();
+            Serial.read();
+            robotdirection = 2;
+            moverobot(robotdirection,encodercount, wheelspeed,sonarthreshold, irthreshold);
+            writeserialdata(datapacket,7);
+            leftencodertotal = 0; //after sending data, clear encoder totals
+            rightencodertotal = 0;
+            break;
+          case 3: //robot right
+            encodercount = Serial.read();
+            wheelspeed = Serial.read();
+            sonarthreshold = Serial.read();
+            irthreshold = Serial.read();
+            Serial.read();
+            robotdirection = 3;
+            moverobot(robotdirection,encodercount, wheelspeed,sonarthreshold, irthreshold);
+            writeserialdata(datapacket,7);
+            leftencodertotal = 0; //after sending data, clear encoder totals
+            rightencodertotal = 0;
+            break;
+          case 4: //robot reverse
+            encodercount = Serial.read();
+            wheelspeed = Serial.read();
+            sonarthreshold = Serial.read();
+            irthreshold = Serial.read();
+            Serial.read();
+            robotdirection = 4;
+            moverobot(robotdirection,encodercount, wheelspeed,sonarthreshold, irthreshold);
+            writeserialdata(datapacket,7);
+            leftencodertotal = 0; //after sending data, clear encoder totals
+            rightencodertotal = 0;
+            break;  
+          case 5: //Head move
+            headpanposition = Serial.read();
+            headtiltposition = Serial.read();
+            headspeed = Serial.read();
+            Serial.read();
+            Serial.read();
+            movehead(headpanposition, headtiltposition, headspeed);          
+            readsensors();
+            writeserialdata(datapacket,7);
+            break;
+          case 6: //Sonar Scan
+            unsigned char tiltangle = Serial.read();
+            unsigned char startangle = Serial.read();
+            unsigned char endangle = Serial.read();
+            unsigned char steps = Serial.read();
+            unsigned char scanspeed = Serial.read();
+            unsigned char sonararray[steps];
+            sonarscan(sonararray,tiltangle,startangle, endangle, steps, scanspeed); 
+            writeserialdata(sonararray,steps);
+            break;
+       
+        }
+      
+      }
+
+    }
+  } 
+}  
+
+
+
+void movehead(unsigned char headpanposition, unsigned char headtiltposition, unsigned char headspeed)
+{
+  
+  int headpantarget =  headpanposition ;
+  int headtilttarget = headtiltposition ;
+  
+  while(true){
+    
+   
+              
+        if(headpantarget > headpanIn)
+            { 
+              headpanIn = headpanIn + 5;
+              headpan.write(headpanIn);
+	      delay(1000);	
+            }
+        else if(headpantarget < headpanIn)
+            {
+              headpanIn = headpanIn - 5;
+              headpan.write(headpanIn);
+	      delay(1000);
+            }
+                
+                
+            
+        if(headtilttarget > headtiltIn)
+            { 
+              headtiltIn = headtiltIn + 5;
+              headtilt.write(headtiltIn);
+	      delay(1000);
+            }
+        else if(headtilttarget < headtiltIn)
+            {
+              headtiltIn = headtiltIn - 5;
+              headtilt.write(headtiltIn);
+              delay(1000);
+            }     
+               
+                 
+        
+        int differencepan = headpantarget - headpanIn; 
+        int differencetilt = headtilttarget - headtiltIn;
+        
+        if(abs(differencepan) < 5 && abs(differencetilt) < 5) //if both servo positions have been reached
+        {
+          break; //exit loop and return
+        }
+  
+ 
+}
+
+}
+void sonarscan(unsigned char sonararray[], unsigned char tiltangle, unsigned char startangle, unsigned char endangle, unsigned char steps,unsigned char scanspeed){
+  float stepsize = (startangle-endangle)/(float)steps;
+  float headpan = startangle;
+  
+  for(int i = 0; i<=steps; i++)
+  {
+    movehead((unsigned char)headpan, tiltangle, scanspeed);
+    unsigned char sonar = readsonar();
+    sonararray[i] = sonar;
+    headpan = headpan - stepsize;
+
+  }
+ 
+}
+
+
+void moverobot(unsigned char robotdirection,unsigned char encodercount, unsigned char currentspeed, unsigned char sonarthreshold, unsigned char irthreshold)
+{
+  
+  //movehead(128,128,6); //centre head before moving
+  readsensors(); // Get latest readings before setting off. If this isn't done, robot may stop first time through the loop if
+                 // last readings were below thresholds
+  
+  if(robotdirection == 1) //robot forward
+  {
+      digitalWrite(MotorDirPinL,HIGH); //set direction pin to forward 
+      digitalWrite(brakePinL,LOW);//disengage brake
+      analogWrite(MotorSpeedPinL,currentSpeed); //set speed pin to current speed
+
+      digitalWrite(MotorDirPinR,HIGH); //set direction pin to forward 
+      digitalWrite(brakePinR,LOW);//disengage brake
+      analogWrite(MotorSpeedPinR,currentSpeed); //set speed pin to current speed
+  }
+  else if(robotdirection == 2) //robot left
+  {
+      
+      digitalWrite(MotorDirPinL,LOW); //set direction pin to forward 
+      digitalWrite(brakePinL,HIGH);//disengage brake
+      analogWrite(MotorSpeedPinL,currentSpeed); //set speed pin to current speed
+
+      digitalWrite(MotorDirPinR,HIGH); //set direction pin to forward 
+      digitalWrite(brakePinR,LOW);//disengage brake
+      analogWrite(MotorSpeedPinR,currentSpeed); //set speed pin to current speed
+
+  }
+  else if(robotdirection == 3) //robot right
+  {
+      
+      digitalWrite(MotorDirPinL,HIGH); //set direction pin to forward 
+      digitalWrite(brakePinL,LOW);//disengage brake
+      analogWrite(MotorSpeedPinL,currentSpeed); //set speed pin to current speed
+
+      digitalWrite(MotorDirPinR,LOW); //set direction pin to forward 
+      digitalWrite(brakePinR,HIGH);//disengage brake
+      analogWrite(MotorSpeedPinR,currentSpeed); //set speed pin to current speed
+
+  }
+  else if(robotdirection == 4) //robot reverse
+  {
+      
+      digitalWrite(MotorDirPinL,LOW); //set direction pin to forward 
+      digitalWrite(brakePinL,HIGH);//disengage brake
+      analogWrite(MotorSpeedPinL,currentSpeed); //set speed pin to current speed
+
+      digitalWrite(MotorDirPinR,LOW); //set direction pin to forward 
+      digitalWrite(brakePinR,HIGH);//disengage brake
+      analogWrite(MotorSpeedPinR,currentSpeed); //set speed pin to current speed
+
+  }
+  
+  //initialize all encoder counts to zero and wheel speeds to stopped before
+  //entering pid loop
+  leftencodertotal = 0;
+  rightencodertotal = 0;
+  leftencoder = 0;
+  rightencoder = 0;  
+  
+  while(true){
+    
+            
+                 
+            if(leftincrement()>=encodercount)
+            {
+	      digitalWrite(MotorDirPinL,LOW); //set direction pin to forward 
+              digitalWrite(brakePinL,LOW);//disengage brake
+              analogWrite(MotorSpeedPinL,0); //set speed pin to current 
+            }
+
+            if(rightincrement()>=encodercount)
+            {
+	      digitalWrite(MotorDirPinR,LOW); //set direction pin to forward 
+              digitalWrite(brakePinR,LOW);//disengage brake
+              analogWrite(MotorSpeedPinR,0); //set speed pin to current 
+            }
+            
+            if(leftencodertotal >= encodercount && rightencodertotal >= encodercount) //if both wheels have reached their target
+            {
+              digitalWrite(MotorDirPinL,LOW); 
+              digitalWrite(brakePinL,LOW);
+              analogWrite(MotorSpeedPinL,0); //set speed pin to current
+
+ 
+              digitalWrite(MotorDirPinR,LOW);  
+              digitalWrite(brakePinR,LOW);
+              analogWrite(MotorSpeedPinR,0); //set speed pin to current 
+              break; //return from while loop
+            }       
+           
+           
+          
+        
+            
+             //Check for objects whilst moving. If an object is detected, stop the wheels and return
+            
+            readsensors();
+            if(datapacket[0]>irthreshold || datapacket[1]>irthreshold  || datapacket[2]>irthreshold  || datapacket[5]<sonarthreshold) 
+             //if obstacle is detected by ir sensors or sonar
+             {
+
+             digitalWrite(MotorDirPinL,LOW); 
+             digitalWrite(brakePinL,LOW);
+             analogWrite(MotorSpeedPinL,0); //set speed pin to current 
+
+
+             digitalWrite(MotorDirPinR,LOW);  
+             digitalWrite(brakePinR,LOW);
+             analogWrite(MotorSpeedPinR,0); //set speed pin to current 
+          
+             break;
+             }
+         
+  }   
+
+
+
+
+unsigned char readsonar(){
+  //read head sonar sensor
+  pinMode(38, OUTPUT);
+  digitalWrite(38, LOW);             // Make sure pin is low before sending a short high to trigger ranging
+  delayMicroseconds(2);
+  digitalWrite(38, HIGH);            // Send a short 10 microsecond high burst on pin to start ranging
+  delayMicroseconds(10);
+  digitalWrite(38, LOW);             // Send pin low again before waiting for pulse back in
+  pinMode(38, INPUT);
+  int duration = pulseIn(38, HIGH);  // Reads echo pulse in from SRF05 in micro seconds
+  int sonar = (duration/58);         // Dividing this by 58 gives us a distance in cm
+  if(sonar > 255)
+  {
+    sonar = 255;
+  }
+  delay(10);
+  return sonar;
+}
+ 
+
+//Read all of the sensors and form data into a packet ready to send 
+void readsensors() {
+  
+  //read IR sensors and servo feedback
+  unsigned char leftlookingIR = analogRead(2)/4; //divide by four to keep value within range of unsigned char
+  unsigned char centreIR = analogRead(3)/4;
+  unsigned char rightlookingIR = analogRead(4)/4;
+  unsigned char headpanservo = 100;
+  unsigned char headtiltservo = 110;
+  
+  unsigned char sonar = readsonar();
+  
+  //form data into a data packet array
+  datapacket[0] = leftlookingIR;
+  datapacket[1] = centreIR;
+  datapacket[2] = rightlookingIR;
+  datapacket[3] = headpanservo;
+  datapacket[4] = headtiltservo;
+  datapacket[5] = sonar;
+  datapacket[6] = leftencodertotal;  //send encoder totals, but reset to zero following send
+  datapacket[7] = rightencodertotal; //encoder count sent to pc is total since last send
+
+  return;
+
+}
+
+void writeserialdata(unsigned char datapacket[], int arraysize){
+      Serial.write(255);
+      Serial.write(255);
+
+      for(int i = 0;i<arraysize;i++)    //write datapacket values to serial
+      {
+        Serial.write(datapacket[i]);
+      }
+}
+
+
+
+
+
+
+
